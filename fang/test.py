@@ -69,7 +69,7 @@ BRACKET_CROSSBAR_HALF_HEIGHT = 0.006
 BRACKET_CROSSBAR_MARGIN_M = 0.014
 ADAPTER_POS = np.array([0.0, 0.0, 0.012], dtype=float)
 ADAPTER_SIZE = (0.018, 0.012, 0.0)
-ENDOSCOPE_MESH_POS = np.array([-0.017076289, -0.019918535, 0.024], dtype=float)
+ENDOSCOPE_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
 CAMERA_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
 HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.018], dtype=float)
@@ -78,6 +78,8 @@ HEAD_CAMERA_SUPPORT_START = np.array([0.0, 0.0, 0.012], dtype=float)
 HEAD_CAMERA_SUPPORT_END = HEAD_CAMERA_MODULE_OFFSET + np.array([0.001, 0.0, -0.004], dtype=float)
 HELIX_START = np.array([0.001, 0.0, 0.012], dtype=float)
 HELIX_END = CAMERA_TO_ENDOSCOPE_OFFSET + np.array([0.0, 0.0, -0.014], dtype=float)
+CAMERA_TO_ENDOSCOPE_CONNECT_START = np.array([0.0, 0.0, 0.010], dtype=float)
+CAMERA_TO_ENDOSCOPE_CONNECT_END = CAMERA_TO_ENDOSCOPE_OFFSET + np.array([0.0, 0.0, -0.004], dtype=float)
 HELIX_RADIUS_M = 0.004
 HELIX_TURNS = 2.5
 HELIX_SEGMENTS = 12
@@ -539,9 +541,17 @@ def add_sensor_head(body, camera_key: str) -> None:
     camera_plate.contype = 0
     camera_plate.conaffinity = 0
 
-    # The bracket fixes the camera module; the endoscope hangs from the camera
-    # itself through a spiral connector so the tool is no longer independently
-    # attached to the bracket.
+    # The bracket fixes the camera module. The endoscope is mounted coaxially in
+    # front of the camera through a rigid coupler, while the spiral remains as a
+    # visible secondary linkage around that central axis.
+    add_capsule_between_points(
+        camera_module,
+        name=f"{camera_key}_endoscope_coupler",
+        start=CAMERA_TO_ENDOSCOPE_CONNECT_START,
+        end=CAMERA_TO_ENDOSCOPE_CONNECT_END,
+        radius=0.0024,
+        rgba=BRACKET_RGBA,
+    )
     add_helical_link(
         camera_module,
         name_prefix=f"{camera_key}_spiral_link",
@@ -553,15 +563,6 @@ def add_sensor_head(body, camera_key: str) -> None:
         wire_radius=HELIX_WIRE_RADIUS,
         rgba=BRACKET_RGBA,
     )
-    add_capsule_between_points(
-        camera_module,
-        name=f"{camera_key}_endoscope_backbone",
-        start=np.array([0.0, 0.0, 0.010], dtype=float),
-        end=CAMERA_TO_ENDOSCOPE_OFFSET + np.array([0.0, 0.0, -0.016], dtype=float),
-        radius=0.0010,
-        rgba=BRACKET_RGBA,
-    )
-
     endoscope_module = camera_module.add_body(name=f"{camera_key}_endoscope_module")
     endoscope_module.pos = CAMERA_TO_ENDOSCOPE_OFFSET
     add_visual_mesh_geom(
@@ -1309,7 +1310,7 @@ class EndoscopeControlPanel:
             text=(
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
                 "The bracket fixes the left and right cameras plus the projector.\n"
-                "Each endoscope is mounted directly in front of its camera through a spiral connector.\n"
+                "Each endoscope is mounted coaxially in front of its camera through a rigid coupler and spiral link.\n"
                 "The projector stays above the stereo pair on a short bracket. Leave approximation off if you only need placement."
             ),
             justify="left",
@@ -1348,7 +1349,7 @@ class EndoscopeControlPanel:
                     f"Toe-in: {config.head_toe_in_deg:.1f} deg",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
-                    "Head layout: bracket -> camera, then camera -> forward endoscope via spiral link",
+                    "Head layout: bracket -> camera, then coaxial forward endoscope via rigid coupler + spiral link",
                     "Projector mount: bracket-fixed above both camera modules",
                     f"Projector midline offset Y: {config.projector_y_m * 1000.0:.1f} mm",
                     f"Projector: {'ON' if config.projector_enable else 'OFF'}  FOV={config.projector_fovy_deg:.1f} deg",
