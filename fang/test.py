@@ -69,8 +69,13 @@ BRACKET_CROSSBAR_HALF_HEIGHT = 0.006
 BRACKET_CROSSBAR_MARGIN_M = 0.014
 ADAPTER_POS = np.array([0.0, 0.0, 0.012], dtype=float)
 ADAPTER_SIZE = (0.018, 0.012, 0.0)
-ENDOSCOPE_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
-CAMERA_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
+# The endoscope rod axis is offset inside the STL, so align to that axis rather
+# than to the overall mesh bounding-box center.
+ENDOSCOPE_MESH_POS = np.array([-0.017095, -0.025616, -0.05835], dtype=float)
+# The camera STL points backwards in its file coordinates. Rotate it 180 degrees
+# around the local x axis so the visible front matches the virtual camera front.
+CAMERA_MESH_POS = np.array([-0.018954, 0.018954, 0.015], dtype=float)
+CAMERA_MESH_QUAT = (0.0, 1.0, 0.0, 0.0)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
 HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.018], dtype=float)
 CAMERA_TO_ENDOSCOPE_OFFSET = np.array([0.0, 0.0, 0.040], dtype=float)
@@ -417,12 +422,15 @@ def add_visual_mesh_geom(
     name: str,
     mesh_name: str,
     pos: np.ndarray,
+    quat: tuple[float, float, float, float] | None = None,
     rgba: tuple[float, float, float, float],
 ) -> None:
     geom = body.add_geom(name=name)
     geom.type = mujoco.mjtGeom.mjGEOM_MESH
     geom.meshname = mesh_name
     geom.pos = pos
+    if quat is not None:
+        geom.quat = quat
     geom.rgba = rgba
     geom.contype = 0
     geom.conaffinity = 0
@@ -537,6 +545,7 @@ def add_sensor_head(body, camera_key: str) -> None:
         name=f"{camera_key}_camera_body_geom",
         mesh_name="camera_mesh",
         pos=CAMERA_MESH_POS,
+        quat=CAMERA_MESH_QUAT,
         rgba=HEAD_COLORS[camera_key]["camera"],
     )
     camera_plate = camera_module.add_geom(name=f"{camera_key}_camera_plate")
