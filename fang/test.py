@@ -73,13 +73,11 @@ ENDOSCOPE_MESH_POS = np.array([-0.017076289, -0.019918535, 0.024], dtype=float)
 CAMERA_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
 HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.018], dtype=float)
-HEAD_ENDOSCOPE_MODULE_OFFSET = np.array([0.008, 0.0, -0.010], dtype=float)
+CAMERA_TO_ENDOSCOPE_OFFSET = np.array([0.018, 0.0, -0.028], dtype=float)
 HEAD_CAMERA_SUPPORT_START = np.array([0.0, 0.0, 0.012], dtype=float)
-HEAD_ENDOSCOPE_SUPPORT_START = np.array([0.0, 0.0, 0.010], dtype=float)
 HEAD_CAMERA_SUPPORT_END = HEAD_CAMERA_MODULE_OFFSET + np.array([0.001, 0.0, -0.004], dtype=float)
-HEAD_ENDOSCOPE_SUPPORT_END = HEAD_ENDOSCOPE_MODULE_OFFSET + np.array([0.001, 0.0, 0.004], dtype=float)
-HELIX_START = HEAD_ENDOSCOPE_MODULE_OFFSET + np.array([0.003, 0.0, 0.020], dtype=float)
-HELIX_END = HEAD_CAMERA_MODULE_OFFSET + np.array([-0.002, 0.0, -0.010], dtype=float)
+HELIX_START = np.array([0.002, 0.0, -0.006], dtype=float)
+HELIX_END = CAMERA_TO_ENDOSCOPE_OFFSET + np.array([-0.003, 0.0, 0.018], dtype=float)
 HELIX_RADIUS_M = 0.004
 HELIX_TURNS = 2.5
 HELIX_SEGMENTS = 12
@@ -523,42 +521,6 @@ def add_sensor_head(body, camera_key: str) -> None:
         radius=0.0035,
         rgba=BRACKET_RGBA,
     )
-    add_capsule_between_points(
-        body,
-        name=f"{camera_key}_endoscope_support",
-        start=HEAD_ENDOSCOPE_SUPPORT_START,
-        end=HEAD_ENDOSCOPE_SUPPORT_END,
-        radius=0.0030,
-        rgba=BRACKET_RGBA,
-    )
-    add_helical_link(
-        body,
-        name_prefix=f"{camera_key}_spiral_link",
-        start=HELIX_START,
-        end=HELIX_END,
-        radius=HELIX_RADIUS_M,
-        turns=HELIX_TURNS,
-        segments=HELIX_SEGMENTS,
-        wire_radius=HELIX_WIRE_RADIUS,
-        rgba=BRACKET_RGBA,
-    )
-
-    endoscope_module = body.add_body(name=f"{camera_key}_endoscope_module")
-    endoscope_module.pos = HEAD_ENDOSCOPE_MODULE_OFFSET
-    add_visual_mesh_geom(
-        endoscope_module,
-        name=f"{camera_key}_endoscope_body_geom",
-        mesh_name="endoscope_mesh",
-        pos=ENDOSCOPE_MESH_POS,
-        rgba=HEAD_COLORS[camera_key]["endoscope"],
-    )
-    endoscope_ring = endoscope_module.add_geom(name=f"{camera_key}_endoscope_ring")
-    endoscope_ring.type = mujoco.mjtGeom.mjGEOM_CYLINDER
-    endoscope_ring.pos = [0.002, 0.0, 0.010]
-    endoscope_ring.size = [0.010, 0.004, 0.0]
-    endoscope_ring.rgba = BRACKET_RGBA
-    endoscope_ring.contype = 0
-    endoscope_ring.conaffinity = 0
 
     camera_module = body.add_body(name=f"{camera_key}_camera_module")
     camera_module.pos = HEAD_CAMERA_MODULE_OFFSET
@@ -576,6 +538,46 @@ def add_sensor_head(body, camera_key: str) -> None:
     camera_plate.rgba = BRACKET_RGBA
     camera_plate.contype = 0
     camera_plate.conaffinity = 0
+
+    # The bracket fixes the camera module; the endoscope hangs from the camera
+    # itself through a spiral connector so the tool is no longer independently
+    # attached to the bracket.
+    add_helical_link(
+        camera_module,
+        name_prefix=f"{camera_key}_spiral_link",
+        start=HELIX_START,
+        end=HELIX_END,
+        radius=HELIX_RADIUS_M,
+        turns=HELIX_TURNS,
+        segments=HELIX_SEGMENTS,
+        wire_radius=HELIX_WIRE_RADIUS,
+        rgba=BRACKET_RGBA,
+    )
+    add_capsule_between_points(
+        camera_module,
+        name=f"{camera_key}_endoscope_backbone",
+        start=np.array([0.001, 0.0, -0.006], dtype=float),
+        end=CAMERA_TO_ENDOSCOPE_OFFSET + np.array([-0.001, 0.0, 0.014], dtype=float),
+        radius=0.0010,
+        rgba=BRACKET_RGBA,
+    )
+
+    endoscope_module = camera_module.add_body(name=f"{camera_key}_endoscope_module")
+    endoscope_module.pos = CAMERA_TO_ENDOSCOPE_OFFSET
+    add_visual_mesh_geom(
+        endoscope_module,
+        name=f"{camera_key}_endoscope_body_geom",
+        mesh_name="endoscope_mesh",
+        pos=ENDOSCOPE_MESH_POS,
+        rgba=HEAD_COLORS[camera_key]["endoscope"],
+    )
+    endoscope_ring = endoscope_module.add_geom(name=f"{camera_key}_endoscope_ring")
+    endoscope_ring.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+    endoscope_ring.pos = [0.002, 0.0, 0.010]
+    endoscope_ring.size = [0.010, 0.004, 0.0]
+    endoscope_ring.rgba = BRACKET_RGBA
+    endoscope_ring.contype = 0
+    endoscope_ring.conaffinity = 0
 
     camera = camera_module.add_camera(name=CAMERA_NAMES[camera_key])
     camera.pos = camera_local_position(DEFAULT_CONFIG)
@@ -1306,7 +1308,8 @@ class EndoscopeControlPanel:
             frame,
             text=(
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
-                "Each camera sits above its endoscope and is linked by a spiral connector.\n"
+                "The bracket fixes the left and right cameras plus the projector.\n"
+                "Each endoscope is suspended directly from its camera through a spiral connector.\n"
                 "The projector stays above the stereo pair on a short bracket. Leave approximation off if you only need placement."
             ),
             justify="left",
@@ -1345,8 +1348,8 @@ class EndoscopeControlPanel:
                     f"Toe-in: {config.head_toe_in_deg:.1f} deg",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
-                    "Head layout: camera above, endoscope below, spiral link between them",
-                    "Projector mount: short bracket above both camera modules",
+                    "Head layout: bracket -> camera, then camera -> endoscope via spiral link",
+                    "Projector mount: bracket-fixed above both camera modules",
                     f"Projector midline offset Y: {config.projector_y_m * 1000.0:.1f} mm",
                     f"Projector: {'ON' if config.projector_enable else 'OFF'}  FOV={config.projector_fovy_deg:.1f} deg",
                     f"Projector pattern: {resolved_pattern if resolved_pattern is not None else 'missing / not set'}",
