@@ -90,13 +90,17 @@ RING_CONNECTOR_CORE_SIZE = (0.0098, 0.0060, 0.0)
 RING_CONNECTOR_FLANGE_SIZE = (0.0130, 0.0024, 0.0)
 RING_CONNECTOR_FLANGE_REAR_POS = np.array([0.0, 0.0, -0.0036], dtype=float)
 RING_CONNECTOR_FLANGE_FRONT_POS = np.array([0.0, 0.0, 0.0036], dtype=float)
-PROJECTOR_SUPPORT_START_POS = np.array([-0.010, 0.0, 0.040], dtype=float)
-PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.0030, 0.0030)
+PROJECTOR_BASE_BLOCK_POS = np.array([0.006, 0.0, 0.041], dtype=float)
+PROJECTOR_BASE_BLOCK_SIZE = (0.014, 0.018, 0.0035)
+PROJECTOR_COLUMN_BASE_POS = np.array([0.006, 0.0, 0.0445], dtype=float)
+PROJECTOR_COLUMN_HALF_SIZE = (0.0040, 0.0040)
+PROJECTOR_TOP_ARM_HALF_SIZE = (0.0035, 0.0035)
+PROJECTOR_MOUNT_BLOCK_HALF_SIZE = (0.0045, 0.0045)
+PROJECTOR_TOP_CLEARANCE_M = 0.016
+PROJECTOR_MOUNT_ANCHOR_LOCAL_POS = np.array([0.0, 0.0, -0.014], dtype=float)
 PROJECTOR_HOUSING_SIZE = (0.012, 0.010, 0.012)
 PROJECTOR_LENS_POS = np.array([0.0, 0.0, 0.012], dtype=float)
 PROJECTOR_LENS_SIZE = (0.006, 0.0045, 0.0)
-PROJECTOR_MOUNT_CAP_POS = np.array([-0.010, 0.0, 0.041], dtype=float)
-PROJECTOR_MOUNT_CAP_SIZE = (0.014, 0.018, 0.0035)
 
 ROBOT_ARM_RGBA = (0.30, 0.36, 0.46, 1.0)
 BRACKET_RGBA = (0.75, 0.59, 0.22, 1.0)
@@ -298,6 +302,18 @@ def projector_local_position(config: EndoscopeCameraConfig) -> np.ndarray:
     return np.array([config.projector_x_m, config.projector_y_m, config.projector_z_m], dtype=float)
 
 
+def projector_mount_anchor_position(config: EndoscopeCameraConfig) -> np.ndarray:
+    return projector_local_position(config) + projector_rotation_matrix(config) @ PROJECTOR_MOUNT_ANCHOR_LOCAL_POS
+
+
+def projector_support_waypoints(config: EndoscopeCameraConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    mount_anchor = projector_mount_anchor_position(config)
+    top_plane_z = max(PROJECTOR_COLUMN_BASE_POS[2] + PROJECTOR_TOP_CLEARANCE_M, mount_anchor[2] + PROJECTOR_TOP_CLEARANCE_M)
+    column_top = np.array([PROJECTOR_COLUMN_BASE_POS[0], PROJECTOR_COLUMN_BASE_POS[1], top_plane_z], dtype=float)
+    top_arm_end = np.array([mount_anchor[0], mount_anchor[1], top_plane_z], dtype=float)
+    return PROJECTOR_COLUMN_BASE_POS.copy(), column_top, top_arm_end, mount_anchor
+
+
 def camera_pixel_intrinsics(config: EndoscopeCameraConfig) -> tuple[float, float, float, float]:
     width, height = CAMERA_RESOLUTION
     fy = 0.5 * height / math.tan(math.radians(config.fovy_deg) / 2.0)
@@ -471,6 +487,47 @@ def add_capsule_between_points(
     geom.conaffinity = 0
 
 
+def box_segment_pose(
+    start: np.ndarray,
+    end: np.ndarray,
+    half_size_xy: tuple[float, float],
+) -> tuple[list[float], np.ndarray, list[float]]:
+    vector = np.array(end, dtype=float) - np.array(start, dtype=float)
+    length = max(float(np.linalg.norm(vector)), 1e-5)
+    pos = ((np.array(start, dtype=float) + np.array(end, dtype=float)) / 2.0).tolist()
+    quat = quat_align_z_to_vector(vector)
+    size = [half_size_xy[0], half_size_xy[1], length / 2.0]
+    return pos, quat, size
+
+
+def configure_box_segment_geom(
+    geom,
+    *,
+    start: np.ndarray,
+    end: np.ndarray,
+    half_size_xy: tuple[float, float],
+) -> None:
+    pos, quat, size = box_segment_pose(start, end, half_size_xy)
+    geom.pos = pos
+    geom.quat = quat
+    geom.size = size
+
+
+def update_box_segment_geom(
+    model: mujoco.MjModel,
+    geom_name: str,
+    *,
+    start: np.ndarray,
+    end: np.ndarray,
+    half_size_xy: tuple[float, float],
+) -> None:
+    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+    pos, quat, size = box_segment_pose(start, end, half_size_xy)
+    model.geom_pos[geom_id] = pos
+    model.geom_quat[geom_id] = quat
+    model.geom_size[geom_id] = size
+
+
 def add_sensor_head(body, camera_key: str) -> None:
     adapter = body.add_geom(name=f"{camera_key}_adapter")
     adapter.type = mujoco.mjtGeom.mjGEOM_CYLINDER
@@ -555,27 +612,57 @@ def add_sensor_head(body, camera_key: str) -> None:
 
 
 def add_projector_body(spec: mujoco.MjSpec) -> None:
-    # The projector is mounted above the camera modules, with a short bracket
-    # that keeps it on the stereo midline and out of the way of the endoscopes.
+    # The projector sits above the stereo pair on a folded support that rises
+    # first and then reaches forward toward the projector mount point.
     rig_body = spec.body(TOOL_RIG_BODY_NAME)
     if rig_body is None:
         raise ValueError("Failed to find dual endoscope rig body in generated MJCF model.")
 
-    mount_cap = rig_body.add_geom(name="projector_mount_cap")
-    mount_cap.type = mujoco.mjtGeom.mjGEOM_BOX
-    mount_cap.pos = PROJECTOR_MOUNT_CAP_POS
-    mount_cap.size = PROJECTOR_MOUNT_CAP_SIZE
-    mount_cap.rgba = BRACKET_RGBA
-    mount_cap.contype = 0
-    mount_cap.conaffinity = 0
+    column_base, column_top, top_arm_end, mount_anchor = projector_support_waypoints(DEFAULT_CONFIG)
 
-    support = rig_body.add_geom(name="projector_support")
-    support.type = mujoco.mjtGeom.mjGEOM_BOX
-    support.pos = (PROJECTOR_SUPPORT_START_POS + projector_local_position(DEFAULT_CONFIG)) / 2.0
-    support.size = [*PROJECTOR_SUPPORT_HALF_SIZE_XY, 0.012]
-    support.rgba = BRACKET_RGBA
-    support.contype = 0
-    support.conaffinity = 0
+    base_block = rig_body.add_geom(name="projector_base_block")
+    base_block.type = mujoco.mjtGeom.mjGEOM_BOX
+    base_block.pos = PROJECTOR_BASE_BLOCK_POS
+    base_block.size = PROJECTOR_BASE_BLOCK_SIZE
+    base_block.rgba = BRACKET_RGBA
+    base_block.contype = 0
+    base_block.conaffinity = 0
+
+    vertical_support = rig_body.add_geom(name="projector_vertical_support")
+    vertical_support.type = mujoco.mjtGeom.mjGEOM_BOX
+    configure_box_segment_geom(
+        vertical_support,
+        start=column_base,
+        end=column_top,
+        half_size_xy=PROJECTOR_COLUMN_HALF_SIZE,
+    )
+    vertical_support.rgba = BRACKET_RGBA
+    vertical_support.contype = 0
+    vertical_support.conaffinity = 0
+
+    top_arm = rig_body.add_geom(name="projector_top_arm")
+    top_arm.type = mujoco.mjtGeom.mjGEOM_BOX
+    configure_box_segment_geom(
+        top_arm,
+        start=column_top,
+        end=top_arm_end,
+        half_size_xy=PROJECTOR_TOP_ARM_HALF_SIZE,
+    )
+    top_arm.rgba = BRACKET_RGBA
+    top_arm.contype = 0
+    top_arm.conaffinity = 0
+
+    mount_block = rig_body.add_geom(name="projector_mount_block")
+    mount_block.type = mujoco.mjtGeom.mjGEOM_BOX
+    configure_box_segment_geom(
+        mount_block,
+        start=top_arm_end,
+        end=mount_anchor,
+        half_size_xy=PROJECTOR_MOUNT_BLOCK_HALF_SIZE,
+    )
+    mount_block.rgba = BRACKET_RGBA
+    mount_block.contype = 0
+    mount_block.conaffinity = 0
 
     projector_body = rig_body.add_body(name=PROJECTOR_BODY_NAME)
     projector_body.pos = projector_local_position(DEFAULT_CONFIG)
@@ -706,17 +793,28 @@ def apply_projector_runtime_config(model: mujoco.MjModel, config: EndoscopeCamer
     projector_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, PROJECTOR_BODY_NAME)
     model.body_pos[projector_body_id] = projector_local_position(config)
     model.body_quat[projector_body_id] = projector_quaternion(config)
-
-    projector_support_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "projector_support")
-    projector_vector = projector_local_position(config) - PROJECTOR_SUPPORT_START_POS
-    projector_length = max(float(np.linalg.norm(projector_vector)), 1e-4)
-    model.geom_pos[projector_support_id] = PROJECTOR_SUPPORT_START_POS + projector_vector / 2.0
-    model.geom_quat[projector_support_id] = quat_align_z_to_vector(projector_vector)
-    model.geom_size[projector_support_id] = [
-        PROJECTOR_SUPPORT_HALF_SIZE_XY[0],
-        PROJECTOR_SUPPORT_HALF_SIZE_XY[1],
-        projector_length / 2.0,
-    ]
+    column_base, column_top, top_arm_end, mount_anchor = projector_support_waypoints(config)
+    update_box_segment_geom(
+        model,
+        "projector_vertical_support",
+        start=column_base,
+        end=column_top,
+        half_size_xy=PROJECTOR_COLUMN_HALF_SIZE,
+    )
+    update_box_segment_geom(
+        model,
+        "projector_top_arm",
+        start=column_top,
+        end=top_arm_end,
+        half_size_xy=PROJECTOR_TOP_ARM_HALF_SIZE,
+    )
+    update_box_segment_geom(
+        model,
+        "projector_mount_block",
+        start=top_arm_end,
+        end=mount_anchor,
+        half_size_xy=PROJECTOR_MOUNT_BLOCK_HALF_SIZE,
+    )
 
 
 def apply_visual_theme(model: mujoco.MjModel) -> None:
@@ -1276,7 +1374,7 @@ class EndoscopeControlPanel:
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
                 "The bracket fixes the left and right cameras plus the projector.\n"
                 "Each endoscope is mounted coaxially in front of its camera through a ring connector.\n"
-                "The projector stays above the stereo pair on a short bracket.\n"
+                "The projector stays above the stereo pair on a folded top bracket.\n"
                 "Defaults target near-range structured-light work: 80-300 mm depth and >=135 deg FOV."
             ),
             justify="left",
@@ -1317,7 +1415,7 @@ class EndoscopeControlPanel:
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
                     "Head layout: bracket -> camera -> ring connector -> endoscope",
-                    "Projector mount: bracket-fixed above both camera modules",
+                    "Projector mount: vertical support -> top arm -> mount block",
                     f"Projector midline offset Y: {config.projector_y_m * 1000.0:.1f} mm",
                     f"Projector: {'ON' if config.projector_enable else 'OFF'}  FOV={config.projector_fovy_deg:.1f} deg",
                     f"Projector pattern: {resolved_pattern if resolved_pattern is not None else 'missing / not set'}",
