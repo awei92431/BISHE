@@ -72,11 +72,13 @@ ADAPTER_SIZE = (0.018, 0.012, 0.0)
 ENDOSCOPE_MESH_POS = np.array([-0.017076289, -0.019918535, 0.024], dtype=float)
 CAMERA_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
-PROJECTOR_SUPPORT_START_POS = np.array([0.0, 0.0, 0.024], dtype=float)
-PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.004, 0.004)
-PROJECTOR_HOUSING_SIZE = (0.016, 0.012, 0.018)
-PROJECTOR_LENS_POS = np.array([0.0, 0.0, 0.018], dtype=float)
-PROJECTOR_LENS_SIZE = (0.008, 0.006, 0.0)
+PROJECTOR_SUPPORT_START_POS = np.array([0.012, 0.0, 0.030], dtype=float)
+PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.0035, 0.0035)
+PROJECTOR_HOUSING_SIZE = (0.012, 0.010, 0.012)
+PROJECTOR_LENS_POS = np.array([0.0, 0.0, 0.012], dtype=float)
+PROJECTOR_LENS_SIZE = (0.006, 0.0045, 0.0)
+PROJECTOR_MOUNT_CAP_POS = np.array([0.010, 0.0, 0.029], dtype=float)
+PROJECTOR_MOUNT_CAP_SIZE = (0.008, 0.018, 0.004)
 
 ROBOT_ARM_RGBA = (0.30, 0.36, 0.46, 1.0)
 BRACKET_RGBA = (0.75, 0.59, 0.22, 1.0)
@@ -106,7 +108,7 @@ BASE_CAMERA_ROTATION = np.array(
 
 @dataclass
 class EndoscopeCameraConfig:
-    head_spacing_m: float = 0.085
+    head_spacing_m: float = 0.055
     head_toe_in_deg: float = 30.0
     camera_x_m: float = 0.0
     camera_y_m: float = 0.0
@@ -117,13 +119,13 @@ class EndoscopeCameraConfig:
     yaw_deg: float = 40.0
     pitch_deg: float = -20.0
     roll_deg: float = 0.0
-    projector_x_m: float = 0.0
+    projector_x_m: float = 0.026
     projector_y_m: float = 0.0
-    projector_z_m: float = 0.46
+    projector_z_m: float = 0.095
     projector_yaw_deg: float = 0.0
-    projector_pitch_deg: float = -40.0
+    projector_pitch_deg: float = -60.0
     projector_roll_deg: float = 0.0
-    projector_fovy_deg: float = 70.0
+    projector_fovy_deg: float = 62.0
     projector_pattern_path: str = str(DEFAULT_PROJECTOR_PATTERN_PATH)
     projector_enable: bool = DEFAULT_PROJECTOR_PATTERN_PATH.is_file()
     target_x_m: float = -0.61
@@ -459,16 +461,24 @@ def add_sensor_head(body, camera_key: str) -> None:
 
 
 def add_projector_body(spec: mujoco.MjSpec) -> None:
-    # The projector is modeled as a separate body mounted near the stereo rig.
-    # Its visual housing is independent from the approximation used on the target.
+    # The projector is mounted above the stereo midline so it stays close to the
+    # wrist bracket without widening the baseline between the two cameras.
     rig_body = spec.body(TOOL_RIG_BODY_NAME)
     if rig_body is None:
         raise ValueError("Failed to find dual endoscope rig body in generated MJCF model.")
 
+    mount_cap = rig_body.add_geom(name="projector_mount_cap")
+    mount_cap.type = mujoco.mjtGeom.mjGEOM_BOX
+    mount_cap.pos = PROJECTOR_MOUNT_CAP_POS
+    mount_cap.size = PROJECTOR_MOUNT_CAP_SIZE
+    mount_cap.rgba = BRACKET_RGBA
+    mount_cap.contype = 0
+    mount_cap.conaffinity = 0
+
     support = rig_body.add_geom(name="projector_support")
     support.type = mujoco.mjtGeom.mjGEOM_BOX
     support.pos = (PROJECTOR_SUPPORT_START_POS + projector_local_position(DEFAULT_CONFIG)) / 2.0
-    support.size = [*PROJECTOR_SUPPORT_HALF_SIZE_XY, 0.04]
+    support.size = [*PROJECTOR_SUPPORT_HALF_SIZE_XY, 0.03]
     support.rgba = BRACKET_RGBA
     support.contype = 0
     support.conaffinity = 0
@@ -1095,7 +1105,7 @@ class EndoscopeControlPanel:
             for joint_index in range(len(BENT_QPOS))
         ]
         camera_controls = [
-            ("head_spacing_mm", "Head Spacing (mm)", 40.0, 140.0, 1.0, config.head_spacing_m * 1000.0),
+            ("head_spacing_mm", "Head Spacing (mm)", 40.0, 100.0, 1.0, config.head_spacing_m * 1000.0),
             ("camera_x_mm", "Camera X (mm)", -80.0, 80.0, 1.0, config.camera_x_m * 1000.0),
             ("camera_y_mm", "Camera Y (mm)", -80.0, 80.0, 1.0, config.camera_y_m * 1000.0),
             ("camera_z_mm", "Camera Z (mm)", 200.0, 600.0, 1.0, config.camera_z_m * 1000.0),
@@ -1106,10 +1116,10 @@ class EndoscopeControlPanel:
             ("roll_deg", "Camera Roll (deg)", -180.0, 180.0, 1.0, config.roll_deg),
             ("sensor_w_mm", "Sensor Width (mm)", 2.0, 12.0, 0.1, config.sensor_width_m * 1000.0),
             ("sensor_h_mm", "Sensor Height (mm)", 2.0, 12.0, 0.1, config.sensor_height_m * 1000.0),
-            ("projector_x_mm", "Projector X (mm)", -80.0, 80.0, 1.0, config.projector_x_m * 1000.0),
-            ("projector_y_mm", "Projector Y (mm)", -80.0, 80.0, 1.0, config.projector_y_m * 1000.0),
-            ("projector_z_mm", "Projector Z (mm)", 200.0, 600.0, 1.0, config.projector_z_m * 1000.0),
-            ("projector_yaw_deg", "Projector Yaw (deg)", -45.0, 90.0, 0.5, config.projector_yaw_deg),
+            ("projector_x_mm", "Projector X (mm)", -10.0, 70.0, 1.0, config.projector_x_m * 1000.0),
+            ("projector_y_mm", "Projector Y (mm)", -30.0, 30.0, 1.0, config.projector_y_m * 1000.0),
+            ("projector_z_mm", "Projector Z (mm)", 40.0, 180.0, 1.0, config.projector_z_m * 1000.0),
+            ("projector_yaw_deg", "Projector Yaw (deg)", -30.0, 30.0, 0.5, config.projector_yaw_deg),
             ("projector_pitch_deg", "Projector Pitch (deg)", -45.0, 45.0, 0.5, config.projector_pitch_deg),
             ("projector_roll_deg", "Projector Roll (deg)", -180.0, 180.0, 1.0, config.projector_roll_deg),
             ("projector_fovy_deg", "Projector FOV (deg)", 20.0, 120.0, 0.5, config.projector_fovy_deg),
@@ -1170,7 +1180,7 @@ class EndoscopeControlPanel:
             frame,
             text=(
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
-                "The projector uses a structured-light projector approximation by updating the target texture."
+                "The projector sits above the stereo midline and uses a structured-light projector approximation."
             ),
             justify="left",
             anchor="w",
@@ -1208,6 +1218,7 @@ class EndoscopeControlPanel:
                     f"Toe-in: {config.head_toe_in_deg:.1f} deg",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
+                    f"Projector midline offset Y: {config.projector_y_m * 1000.0:.1f} mm",
                     f"Projector: {'ON' if config.projector_enable else 'OFF'}  FOV={config.projector_fovy_deg:.1f} deg",
                     f"Projector pattern: {resolved_pattern if resolved_pattern is not None else 'missing / not set'}",
                     f"Target sphere: [{sphere[0]:.3f}, {sphere[1]:.3f}, {sphere[2]:.3f}] m",
