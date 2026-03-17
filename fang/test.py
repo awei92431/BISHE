@@ -82,15 +82,14 @@ TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
 # Move the whole camera module forward so the housing starts after the bracket
 # instead of occupying the same volume as the crossbar.
 HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.0455], dtype=float)
-CAMERA_TO_ENDOSCOPE_OFFSET = np.array([0.0, 0.0, 0.040], dtype=float)
 HEAD_CAMERA_SUPPORT_START = np.array([0.0, 0.0, 0.012], dtype=float)
 HEAD_CAMERA_SUPPORT_END = HEAD_CAMERA_MODULE_OFFSET + np.array([0.001, 0.0, -0.0155], dtype=float)
-CAMERA_CONNECTOR_SEAT_POS = np.array([0.0, 0.0, 0.017], dtype=float)
-CAMERA_CONNECTOR_SEAT_SIZE = (0.0085, 0.0085, 0.0045)
-CAMERA_CONNECTOR_TUBE_POS = np.array([0.0, 0.0, 0.028], dtype=float)
-CAMERA_CONNECTOR_TUBE_SIZE = (0.0032, 0.0065, 0.0)
-ENDOSCOPE_LOCK_RING_POS = np.array([0.0, 0.0, 0.003], dtype=float)
-ENDOSCOPE_LOCK_RING_SIZE = (0.0068, 0.0030, 0.0)
+CAMERA_TO_RING_CONNECTOR_OFFSET = np.array([0.0, 0.0, 0.0175], dtype=float)
+RING_TO_ENDOSCOPE_OFFSET = np.array([0.0, 0.0, 0.004], dtype=float)
+RING_CONNECTOR_CORE_SIZE = (0.0082, 0.0045, 0.0)
+RING_CONNECTOR_FLANGE_SIZE = (0.0108, 0.0018, 0.0)
+RING_CONNECTOR_FLANGE_REAR_POS = np.array([0.0, 0.0, -0.0027], dtype=float)
+RING_CONNECTOR_FLANGE_FRONT_POS = np.array([0.0, 0.0, 0.0027], dtype=float)
 PROJECTOR_SUPPORT_START_POS = np.array([-0.010, 0.0, 0.040], dtype=float)
 PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.0030, 0.0030)
 PROJECTOR_HOUSING_SIZE = (0.012, 0.010, 0.012)
@@ -472,51 +471,6 @@ def add_capsule_between_points(
     geom.conaffinity = 0
 
 
-def add_helical_link(
-    body,
-    *,
-    name_prefix: str,
-    start: np.ndarray,
-    end: np.ndarray,
-    radius: float,
-    turns: float,
-    segments: int,
-    wire_radius: float,
-    rgba: tuple[float, float, float, float],
-) -> None:
-    axis = np.array(end, dtype=float) - np.array(start, dtype=float)
-    axis_length = float(np.linalg.norm(axis))
-    if axis_length < 1e-6:
-        return
-
-    axis_dir = axis / axis_length
-    reference = np.array([0.0, 0.0, 1.0], dtype=float)
-    if abs(float(np.dot(axis_dir, reference))) > 0.95:
-        reference = np.array([0.0, 1.0, 0.0], dtype=float)
-
-    basis_u = normalize(np.cross(axis_dir, reference))
-    basis_v = normalize(np.cross(axis_dir, basis_u))
-
-    helix_points: list[np.ndarray] = [np.array(start, dtype=float)]
-    for index in range(1, segments):
-        t = index / segments
-        center = np.array(start, dtype=float) + axis * t
-        angle = 2.0 * math.pi * turns * t
-        radial = radius * (math.cos(angle) * basis_u + math.sin(angle) * basis_v)
-        helix_points.append(center + radial)
-    helix_points.append(np.array(end, dtype=float))
-
-    for index, (point_a, point_b) in enumerate(zip(helix_points[:-1], helix_points[1:])):
-        add_capsule_between_points(
-            body,
-            name=f"{name_prefix}_{index}",
-            start=point_a,
-            end=point_b,
-            radius=wire_radius,
-            rgba=rgba,
-        )
-
-
 def add_sensor_head(body, camera_key: str) -> None:
     adapter = body.add_geom(name=f"{camera_key}_adapter")
     adapter.type = mujoco.mjtGeom.mjGEOM_CYLINDER
@@ -553,26 +507,36 @@ def add_sensor_head(body, camera_key: str) -> None:
     camera_plate.contype = 0
     camera_plate.conaffinity = 0
 
-    # Build a stepped connector so the camera, connector, and endoscope read as
-    # three distinct parts instead of one merged silhouette.
-    front_seat = camera_module.add_geom(name=f"{camera_key}_connector_seat")
-    front_seat.type = mujoco.mjtGeom.mjGEOM_BOX
-    front_seat.pos = CAMERA_CONNECTOR_SEAT_POS
-    front_seat.size = CAMERA_CONNECTOR_SEAT_SIZE
-    front_seat.rgba = CONNECTOR_RGBA
-    front_seat.contype = 0
-    front_seat.conaffinity = 0
+    # Use a standalone flange-like ring between the camera and endoscope so the
+    # three stages read clearly as camera -> ring connector -> endoscope.
+    ring_connector = camera_module.add_body(name=f"{camera_key}_ring_connector")
+    ring_connector.pos = CAMERA_TO_RING_CONNECTOR_OFFSET
 
-    connector_tube = camera_module.add_geom(name=f"{camera_key}_connector_tube")
-    connector_tube.type = mujoco.mjtGeom.mjGEOM_CYLINDER
-    connector_tube.pos = CAMERA_CONNECTOR_TUBE_POS
-    connector_tube.size = CAMERA_CONNECTOR_TUBE_SIZE
-    connector_tube.rgba = CONNECTOR_RGBA
-    connector_tube.contype = 0
-    connector_tube.conaffinity = 0
+    ring_core = ring_connector.add_geom(name=f"{camera_key}_ring_connector_core")
+    ring_core.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+    ring_core.size = RING_CONNECTOR_CORE_SIZE
+    ring_core.rgba = CONNECTOR_RGBA
+    ring_core.contype = 0
+    ring_core.conaffinity = 0
 
-    endoscope_module = camera_module.add_body(name=f"{camera_key}_endoscope_module")
-    endoscope_module.pos = CAMERA_TO_ENDOSCOPE_OFFSET
+    rear_flange = ring_connector.add_geom(name=f"{camera_key}_ring_connector_rear_flange")
+    rear_flange.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+    rear_flange.pos = RING_CONNECTOR_FLANGE_REAR_POS
+    rear_flange.size = RING_CONNECTOR_FLANGE_SIZE
+    rear_flange.rgba = CONNECTOR_RGBA
+    rear_flange.contype = 0
+    rear_flange.conaffinity = 0
+
+    front_flange = ring_connector.add_geom(name=f"{camera_key}_ring_connector_front_flange")
+    front_flange.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+    front_flange.pos = RING_CONNECTOR_FLANGE_FRONT_POS
+    front_flange.size = RING_CONNECTOR_FLANGE_SIZE
+    front_flange.rgba = CONNECTOR_RGBA
+    front_flange.contype = 0
+    front_flange.conaffinity = 0
+
+    endoscope_module = ring_connector.add_body(name=f"{camera_key}_endoscope_module")
+    endoscope_module.pos = RING_TO_ENDOSCOPE_OFFSET
     add_visual_mesh_geom(
         endoscope_module,
         name=f"{camera_key}_endoscope_body_geom",
@@ -580,13 +544,6 @@ def add_sensor_head(body, camera_key: str) -> None:
         pos=ENDOSCOPE_MESH_POS,
         rgba=HEAD_COLORS[camera_key]["endoscope"],
     )
-    endoscope_ring = endoscope_module.add_geom(name=f"{camera_key}_endoscope_ring")
-    endoscope_ring.type = mujoco.mjtGeom.mjGEOM_CYLINDER
-    endoscope_ring.pos = ENDOSCOPE_LOCK_RING_POS
-    endoscope_ring.size = ENDOSCOPE_LOCK_RING_SIZE
-    endoscope_ring.rgba = CONNECTOR_RGBA
-    endoscope_ring.contype = 0
-    endoscope_ring.conaffinity = 0
 
     camera = camera_module.add_camera(name=CAMERA_NAMES[camera_key])
     camera.pos = camera_local_position(DEFAULT_CONFIG)
@@ -1318,7 +1275,7 @@ class EndoscopeControlPanel:
             text=(
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
                 "The bracket fixes the left and right cameras plus the projector.\n"
-                "Each endoscope is mounted coaxially in front of its camera through a stepped connector.\n"
+                "Each endoscope is mounted coaxially in front of its camera through a ring connector.\n"
                 "The projector stays above the stereo pair on a short bracket. Leave approximation off if you only need placement."
             ),
             justify="left",
@@ -1357,7 +1314,7 @@ class EndoscopeControlPanel:
                     f"Toe-in: {config.head_toe_in_deg:.1f} deg",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
-                    "Head layout: bracket -> camera -> connector seat/tube/ring -> endoscope",
+                    "Head layout: bracket -> camera -> ring connector -> endoscope",
                     "Projector mount: bracket-fixed above both camera modules",
                     f"Projector midline offset Y: {config.projector_y_m * 1000.0:.1f} mm",
                     f"Projector: {'ON' if config.projector_enable else 'OFF'}  FOV={config.projector_fovy_deg:.1f} deg",
