@@ -70,11 +70,13 @@ BRACKET_CROSSBAR_MARGIN_M = 0.014
 ADAPTER_POS = np.array([0.0, 0.0, 0.012], dtype=float)
 ADAPTER_SIZE = (0.018, 0.012, 0.0)
 # The endoscope rod axis is offset inside the STL, so align to that axis rather
-# than to the overall mesh bounding-box center.
-ENDOSCOPE_MESH_POS = np.array([-0.017095, -0.025616, -0.05835], dtype=float)
+# than to the overall mesh bounding-box center. Its local z is placed so the
+# endoscope starts after the connector ring instead of overlapping the camera.
+ENDOSCOPE_MESH_POS = np.array([-0.017095, -0.025616, 0.003], dtype=float)
 # The camera STL points backwards in its file coordinates. Rotate it 180 degrees
 # around the local x axis so the visible front matches the virtual camera front.
-CAMERA_MESH_POS = np.array([-0.018954, 0.018954, 0.015], dtype=float)
+# Its z is pulled slightly backward so the connector starts in front of it.
+CAMERA_MESH_POS = np.array([-0.018954, 0.018954, 0.010], dtype=float)
 CAMERA_MESH_QUAT = (0.0, 1.0, 0.0, 0.0)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
 HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.018], dtype=float)
