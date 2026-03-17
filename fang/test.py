@@ -72,13 +72,25 @@ ADAPTER_SIZE = (0.018, 0.012, 0.0)
 ENDOSCOPE_MESH_POS = np.array([-0.017076289, -0.019918535, 0.024], dtype=float)
 CAMERA_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
-PROJECTOR_SUPPORT_START_POS = np.array([0.010, 0.0, 0.032], dtype=float)
-PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.0035, 0.0035)
+HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.018], dtype=float)
+HEAD_ENDOSCOPE_MODULE_OFFSET = np.array([0.008, 0.0, -0.010], dtype=float)
+HEAD_CAMERA_SUPPORT_START = np.array([0.0, 0.0, 0.012], dtype=float)
+HEAD_ENDOSCOPE_SUPPORT_START = np.array([0.0, 0.0, 0.010], dtype=float)
+HEAD_CAMERA_SUPPORT_END = HEAD_CAMERA_MODULE_OFFSET + np.array([0.001, 0.0, -0.004], dtype=float)
+HEAD_ENDOSCOPE_SUPPORT_END = HEAD_ENDOSCOPE_MODULE_OFFSET + np.array([0.001, 0.0, 0.004], dtype=float)
+HELIX_START = HEAD_ENDOSCOPE_MODULE_OFFSET + np.array([0.003, 0.0, 0.020], dtype=float)
+HELIX_END = HEAD_CAMERA_MODULE_OFFSET + np.array([-0.002, 0.0, -0.010], dtype=float)
+HELIX_RADIUS_M = 0.004
+HELIX_TURNS = 2.5
+HELIX_SEGMENTS = 12
+HELIX_WIRE_RADIUS = 0.0014
+PROJECTOR_SUPPORT_START_POS = np.array([-0.010, 0.0, 0.040], dtype=float)
+PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.0030, 0.0030)
 PROJECTOR_HOUSING_SIZE = (0.012, 0.010, 0.012)
 PROJECTOR_LENS_POS = np.array([0.0, 0.0, 0.012], dtype=float)
 PROJECTOR_LENS_SIZE = (0.006, 0.0045, 0.0)
-PROJECTOR_MOUNT_CAP_POS = np.array([0.010, 0.0, 0.031], dtype=float)
-PROJECTOR_MOUNT_CAP_SIZE = (0.010, 0.018, 0.0035)
+PROJECTOR_MOUNT_CAP_POS = np.array([-0.010, 0.0, 0.041], dtype=float)
+PROJECTOR_MOUNT_CAP_SIZE = (0.014, 0.018, 0.0035)
 
 ROBOT_ARM_RGBA = (0.30, 0.36, 0.46, 1.0)
 BRACKET_RGBA = (0.75, 0.59, 0.22, 1.0)
@@ -119,11 +131,11 @@ class EndoscopeCameraConfig:
     yaw_deg: float = 40.0
     pitch_deg: float = -20.0
     roll_deg: float = 0.0
-    projector_x_m: float = 0.022
+    projector_x_m: float = -0.020
     projector_y_m: float = 0.0
-    projector_z_m: float = 0.058
+    projector_z_m: float = 0.072
     projector_yaw_deg: float = 0.0
-    projector_pitch_deg: float = -32.0
+    projector_pitch_deg: float = -24.0
     projector_roll_deg: float = 0.0
     projector_fovy_deg: float = 62.0
     projector_pattern_path: str = str(DEFAULT_PROJECTOR_PATTERN_PATH)
@@ -427,6 +439,73 @@ def add_bracket_geom(
     geom.conaffinity = 0
 
 
+def add_capsule_between_points(
+    body,
+    *,
+    name: str,
+    start: np.ndarray,
+    end: np.ndarray,
+    radius: float,
+    rgba: tuple[float, float, float, float],
+) -> None:
+    vector = np.array(end, dtype=float) - np.array(start, dtype=float)
+    length = max(float(np.linalg.norm(vector)), 1e-5)
+
+    geom = body.add_geom(name=name)
+    geom.type = mujoco.mjtGeom.mjGEOM_CAPSULE
+    geom.pos = ((np.array(start, dtype=float) + np.array(end, dtype=float)) / 2.0).tolist()
+    geom.quat = quat_align_z_to_vector(vector)
+    geom.size = [radius, length / 2.0, 0.0]
+    geom.rgba = rgba
+    geom.contype = 0
+    geom.conaffinity = 0
+
+
+def add_helical_link(
+    body,
+    *,
+    name_prefix: str,
+    start: np.ndarray,
+    end: np.ndarray,
+    radius: float,
+    turns: float,
+    segments: int,
+    wire_radius: float,
+    rgba: tuple[float, float, float, float],
+) -> None:
+    axis = np.array(end, dtype=float) - np.array(start, dtype=float)
+    axis_length = float(np.linalg.norm(axis))
+    if axis_length < 1e-6:
+        return
+
+    axis_dir = axis / axis_length
+    reference = np.array([0.0, 0.0, 1.0], dtype=float)
+    if abs(float(np.dot(axis_dir, reference))) > 0.95:
+        reference = np.array([0.0, 1.0, 0.0], dtype=float)
+
+    basis_u = normalize(np.cross(axis_dir, reference))
+    basis_v = normalize(np.cross(axis_dir, basis_u))
+
+    helix_points: list[np.ndarray] = [np.array(start, dtype=float)]
+    for index in range(1, segments):
+        t = index / segments
+        center = np.array(start, dtype=float) + axis * t
+        angle = 2.0 * math.pi * turns * t
+        radial = radius * (math.cos(angle) * basis_u + math.sin(angle) * basis_v)
+        helix_points.append(center + radial)
+    helix_points.append(np.array(end, dtype=float))
+
+    for index, (point_a, point_b) in enumerate(zip(helix_points[:-1], helix_points[1:])):
+        add_capsule_between_points(
+            body,
+            name=f"{name_prefix}_{index}",
+            start=point_a,
+            end=point_b,
+            radius=wire_radius,
+            rgba=rgba,
+        )
+
+
 def add_sensor_head(body, camera_key: str) -> None:
     adapter = body.add_geom(name=f"{camera_key}_adapter")
     adapter.type = mujoco.mjtGeom.mjGEOM_CYLINDER
@@ -436,22 +515,69 @@ def add_sensor_head(body, camera_key: str) -> None:
     adapter.contype = 0
     adapter.conaffinity = 0
 
-    add_visual_mesh_geom(
+    add_capsule_between_points(
         body,
+        name=f"{camera_key}_camera_support",
+        start=HEAD_CAMERA_SUPPORT_START,
+        end=HEAD_CAMERA_SUPPORT_END,
+        radius=0.0035,
+        rgba=BRACKET_RGBA,
+    )
+    add_capsule_between_points(
+        body,
+        name=f"{camera_key}_endoscope_support",
+        start=HEAD_ENDOSCOPE_SUPPORT_START,
+        end=HEAD_ENDOSCOPE_SUPPORT_END,
+        radius=0.0030,
+        rgba=BRACKET_RGBA,
+    )
+    add_helical_link(
+        body,
+        name_prefix=f"{camera_key}_spiral_link",
+        start=HELIX_START,
+        end=HELIX_END,
+        radius=HELIX_RADIUS_M,
+        turns=HELIX_TURNS,
+        segments=HELIX_SEGMENTS,
+        wire_radius=HELIX_WIRE_RADIUS,
+        rgba=BRACKET_RGBA,
+    )
+
+    endoscope_module = body.add_body(name=f"{camera_key}_endoscope_module")
+    endoscope_module.pos = HEAD_ENDOSCOPE_MODULE_OFFSET
+    add_visual_mesh_geom(
+        endoscope_module,
         name=f"{camera_key}_endoscope_body_geom",
         mesh_name="endoscope_mesh",
         pos=ENDOSCOPE_MESH_POS,
         rgba=HEAD_COLORS[camera_key]["endoscope"],
     )
+    endoscope_ring = endoscope_module.add_geom(name=f"{camera_key}_endoscope_ring")
+    endoscope_ring.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+    endoscope_ring.pos = [0.002, 0.0, 0.010]
+    endoscope_ring.size = [0.010, 0.004, 0.0]
+    endoscope_ring.rgba = BRACKET_RGBA
+    endoscope_ring.contype = 0
+    endoscope_ring.conaffinity = 0
+
+    camera_module = body.add_body(name=f"{camera_key}_camera_module")
+    camera_module.pos = HEAD_CAMERA_MODULE_OFFSET
     add_visual_mesh_geom(
-        body,
+        camera_module,
         name=f"{camera_key}_camera_body_geom",
         mesh_name="camera_mesh",
         pos=CAMERA_MESH_POS,
         rgba=HEAD_COLORS[camera_key]["camera"],
     )
+    camera_plate = camera_module.add_geom(name=f"{camera_key}_camera_plate")
+    camera_plate.type = mujoco.mjtGeom.mjGEOM_BOX
+    camera_plate.pos = [0.001, 0.0, 0.004]
+    camera_plate.size = [0.009, 0.010, 0.0035]
+    camera_plate.rgba = BRACKET_RGBA
+    camera_plate.contype = 0
+    camera_plate.conaffinity = 0
 
-    camera = body.add_camera(name=CAMERA_NAMES[camera_key])
+    camera = camera_module.add_camera(name=CAMERA_NAMES[camera_key])
     camera.pos = camera_local_position(DEFAULT_CONFIG)
     camera.quat = camera_quaternion(DEFAULT_CONFIG, camera_key)
     camera.resolution = CAMERA_RESOLUTION
@@ -461,8 +587,8 @@ def add_sensor_head(body, camera_key: str) -> None:
 
 
 def add_projector_body(spec: mujoco.MjSpec) -> None:
-    # The projector is a compact positioning proxy mounted above and slightly
-    # ahead of the stereo pair, so it does not widen the camera baseline.
+    # The projector is mounted above the camera modules, with a short bracket
+    # that keeps it on the stereo midline and out of the way of the endoscopes.
     rig_body = spec.body(TOOL_RIG_BODY_NAME)
     if rig_body is None:
         raise ValueError("Failed to find dual endoscope rig body in generated MJCF model.")
@@ -478,7 +604,7 @@ def add_projector_body(spec: mujoco.MjSpec) -> None:
     support = rig_body.add_geom(name="projector_support")
     support.type = mujoco.mjtGeom.mjGEOM_BOX
     support.pos = (PROJECTOR_SUPPORT_START_POS + projector_local_position(DEFAULT_CONFIG)) / 2.0
-    support.size = [*PROJECTOR_SUPPORT_HALF_SIZE_XY, 0.015]
+    support.size = [*PROJECTOR_SUPPORT_HALF_SIZE_XY, 0.012]
     support.rgba = BRACKET_RGBA
     support.contype = 0
     support.conaffinity = 0
@@ -1116,7 +1242,7 @@ class EndoscopeControlPanel:
             ("roll_deg", "Camera Roll (deg)", -180.0, 180.0, 1.0, config.roll_deg),
             ("sensor_w_mm", "Sensor Width (mm)", 2.0, 12.0, 0.1, config.sensor_width_m * 1000.0),
             ("sensor_h_mm", "Sensor Height (mm)", 2.0, 12.0, 0.1, config.sensor_height_m * 1000.0),
-            ("projector_x_mm", "Projector X (mm)", -5.0, 50.0, 1.0, config.projector_x_m * 1000.0),
+            ("projector_x_mm", "Projector X (mm)", -40.0, 40.0, 1.0, config.projector_x_m * 1000.0),
             ("projector_y_mm", "Projector Y (mm)", -25.0, 25.0, 1.0, config.projector_y_m * 1000.0),
             ("projector_z_mm", "Projector Z (mm)", 35.0, 110.0, 1.0, config.projector_z_m * 1000.0),
             ("projector_yaw_deg", "Projector Yaw (deg)", -30.0, 30.0, 0.5, config.projector_yaw_deg),
@@ -1180,7 +1306,8 @@ class EndoscopeControlPanel:
             frame,
             text=(
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
-                "The projector is a short overhung mount above the stereo pair. Leave approximation off if you only need placement."
+                "Each camera sits above its endoscope and is linked by a spiral connector.\n"
+                "The projector stays above the stereo pair on a short bracket. Leave approximation off if you only need placement."
             ),
             justify="left",
             anchor="w",
@@ -1218,7 +1345,8 @@ class EndoscopeControlPanel:
                     f"Toe-in: {config.head_toe_in_deg:.1f} deg",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
-                    "Projector mount: short diagonal bracket above stereo pair",
+                    "Head layout: camera above, endoscope below, spiral link between them",
+                    "Projector mount: short bracket above both camera modules",
                     f"Projector midline offset Y: {config.projector_y_m * 1000.0:.1f} mm",
                     f"Projector: {'ON' if config.projector_enable else 'OFF'}  FOV={config.projector_fovy_deg:.1f} deg",
                     f"Projector pattern: {resolved_pattern if resolved_pattern is not None else 'missing / not set'}",
