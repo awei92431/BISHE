@@ -127,29 +127,29 @@ BASE_CAMERA_ROTATION = np.array(
 
 @dataclass
 class EndoscopeCameraConfig:
-    head_spacing_m: float = 0.055
-    head_toe_in_deg: float = 30.0
+    head_spacing_m: float = 0.040
+    head_toe_in_deg: float = 8.0
     camera_x_m: float = 0.0
     camera_y_m: float = 0.0
-    camera_z_m: float = 0.50
-    fovy_deg: float = 55.0
+    camera_z_m: float = 0.180
+    fovy_deg: float = 135.0
     sensor_width_m: float = 0.0064
     sensor_height_m: float = 0.0048
-    yaw_deg: float = 40.0
-    pitch_deg: float = -20.0
+    yaw_deg: float = 0.0
+    pitch_deg: float = -5.0
     roll_deg: float = 0.0
-    projector_x_m: float = -0.020
+    projector_x_m: float = -0.010
     projector_y_m: float = 0.0
-    projector_z_m: float = 0.072
+    projector_z_m: float = 0.195
     projector_yaw_deg: float = 0.0
-    projector_pitch_deg: float = -24.0
+    projector_pitch_deg: float = -5.0
     projector_roll_deg: float = 0.0
-    projector_fovy_deg: float = 62.0
+    projector_fovy_deg: float = 140.0
     projector_pattern_path: str = str(DEFAULT_PROJECTOR_PATTERN_PATH)
     projector_enable: bool = False
-    target_x_m: float = -0.61
+    target_x_m: float = -0.220
     target_y_m: float = 0.0
-    target_z_m: float = 0.497
+    target_z_m: float = 0.180
 
 
 DEFAULT_CONFIG = EndoscopeCameraConfig()
@@ -1199,27 +1199,27 @@ class EndoscopeControlPanel:
             for joint_index in range(len(BENT_QPOS))
         ]
         camera_controls = [
-            ("head_spacing_mm", "Head Spacing (mm)", 40.0, 100.0, 1.0, config.head_spacing_m * 1000.0),
-            ("camera_x_mm", "Camera X (mm)", -80.0, 80.0, 1.0, config.camera_x_m * 1000.0),
-            ("camera_y_mm", "Camera Y (mm)", -80.0, 80.0, 1.0, config.camera_y_m * 1000.0),
-            ("camera_z_mm", "Camera Z (mm)", 200.0, 600.0, 1.0, config.camera_z_m * 1000.0),
-            ("fovy_deg", "Vertical FOV (deg)", 20.0, 110.0, 0.5, config.fovy_deg),
-            ("yaw_deg", "Shared Yaw (deg)", -45.0, 90.0, 0.5, config.yaw_deg),
-            ("toe_in_deg", "Head Toe-In (deg)", 0.0, 45.0, 0.5, config.head_toe_in_deg),
-            ("pitch_deg", "Camera Pitch (deg)", -45.0, 45.0, 0.5, config.pitch_deg),
+            ("head_spacing_mm", "Head Spacing (mm)", 20.0, 80.0, 1.0, config.head_spacing_m * 1000.0),
+            ("camera_x_mm", "Camera X (mm)", -40.0, 40.0, 1.0, config.camera_x_m * 1000.0),
+            ("camera_y_mm", "Camera Y (mm)", -40.0, 40.0, 1.0, config.camera_y_m * 1000.0),
+            ("camera_z_mm", "Camera Z (mm)", 80.0, 300.0, 1.0, config.camera_z_m * 1000.0),
+            ("fovy_deg", "Vertical FOV (deg)", 135.0, 170.0, 0.5, config.fovy_deg),
+            ("yaw_deg", "Shared Yaw (deg)", -20.0, 20.0, 0.5, config.yaw_deg),
+            ("toe_in_deg", "Head Toe-In (deg)", 0.0, 20.0, 0.5, config.head_toe_in_deg),
+            ("pitch_deg", "Camera Pitch (deg)", -20.0, 20.0, 0.5, config.pitch_deg),
             ("roll_deg", "Camera Roll (deg)", -180.0, 180.0, 1.0, config.roll_deg),
             ("sensor_w_mm", "Sensor Width (mm)", 2.0, 12.0, 0.1, config.sensor_width_m * 1000.0),
             ("sensor_h_mm", "Sensor Height (mm)", 2.0, 12.0, 0.1, config.sensor_height_m * 1000.0),
-            ("projector_x_mm", "Projector X (mm)", -40.0, 40.0, 1.0, config.projector_x_m * 1000.0),
-            ("projector_y_mm", "Projector Y (mm)", -25.0, 25.0, 1.0, config.projector_y_m * 1000.0),
-            ("projector_z_mm", "Projector Z (mm)", 35.0, 110.0, 1.0, config.projector_z_m * 1000.0),
-            ("projector_yaw_deg", "Projector Yaw (deg)", -30.0, 30.0, 0.5, config.projector_yaw_deg),
-            ("projector_pitch_deg", "Projector Pitch (deg)", -45.0, 45.0, 0.5, config.projector_pitch_deg),
-            ("projector_roll_deg", "Projector Roll (deg)", -180.0, 180.0, 1.0, config.projector_roll_deg),
-            ("projector_fovy_deg", "Projector FOV (deg)", 20.0, 120.0, 0.5, config.projector_fovy_deg),
-            ("target_x_mm", "Target X (mm)", -800.0, -300.0, 1.0, config.target_x_m * 1000.0),
-            ("target_y_mm", "Target Y (mm)", -120.0, 120.0, 1.0, config.target_y_m * 1000.0),
-            ("target_z_mm", "Target Z (mm)", 300.0, 700.0, 1.0, config.target_z_m * 1000.0),
+            ("projector_x_mm", "Projector X (mm)", -30.0, 30.0, 1.0, config.projector_x_m * 1000.0),
+            ("projector_y_mm", "Projector Y (mm)", -20.0, 20.0, 1.0, config.projector_y_m * 1000.0),
+            ("projector_z_mm", "Projector Z (mm)", 80.0, 300.0, 1.0, config.projector_z_m * 1000.0),
+            ("projector_yaw_deg", "Projector Yaw (deg)", -20.0, 20.0, 0.5, config.projector_yaw_deg),
+            ("projector_pitch_deg", "Projector Pitch (deg)", -20.0, 20.0, 0.5, config.projector_pitch_deg),
+            ("projector_roll_deg", "Projector Roll (deg)", -45.0, 45.0, 1.0, config.projector_roll_deg),
+            ("projector_fovy_deg", "Projector FOV (deg)", 135.0, 170.0, 0.5, config.projector_fovy_deg),
+            ("target_x_mm", "Target X (mm)", -300.0, -80.0, 1.0, config.target_x_m * 1000.0),
+            ("target_y_mm", "Target Y (mm)", -80.0, 80.0, 1.0, config.target_y_m * 1000.0),
+            ("target_z_mm", "Target Z (mm)", 80.0, 300.0, 1.0, config.target_z_m * 1000.0),
         ]
         controls = joint_controls + camera_controls
 
@@ -1276,7 +1276,8 @@ class EndoscopeControlPanel:
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
                 "The bracket fixes the left and right cameras plus the projector.\n"
                 "Each endoscope is mounted coaxially in front of its camera through a ring connector.\n"
-                "The projector stays above the stereo pair on a short bracket. Leave approximation off if you only need placement."
+                "The projector stays above the stereo pair on a short bracket.\n"
+                "Defaults target near-range structured-light work: 80-300 mm depth and >=135 deg FOV."
             ),
             justify="left",
             anchor="w",
@@ -1312,6 +1313,7 @@ class EndoscopeControlPanel:
                     f"cx={cx:.1f}px  cy={cy:.1f}px",
                     f"Head spacing: {config.head_spacing_m * 1000.0:.1f} mm",
                     f"Toe-in: {config.head_toe_in_deg:.1f} deg",
+                    "Mode: near-range stereo structured light (80-300 mm / >=135 deg FOV)",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Projector local pos: [{projector_pos[0]:.3f}, {projector_pos[1]:.3f}, {projector_pos[2]:.3f}] m",
                     "Head layout: bracket -> camera -> ring connector -> endoscope",
