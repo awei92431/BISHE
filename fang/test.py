@@ -29,18 +29,51 @@ JOINT_LIMITS_DEG = (
     (-360.0, 360.0),
 )
 
-TOOL_BODY_NAME = "endoscope_tool"
+TOOL_RIG_BODY_NAME = "dual_endoscope_rig"
 TARGET_BODY_NAME = "inspection_target"
-CAMERA_NAME = "endoscope_camera"
+HEAD_BODY_NAMES = {
+    "primary": "primary_endoscope_head",
+    "secondary": "secondary_endoscope_head",
+}
+CAMERA_NAMES = {
+    "primary": "primary_endoscope_camera",
+    "secondary": "secondary_endoscope_camera",
+}
+CAMERA_LABELS = {
+    "primary": "Primary Head",
+    "secondary": "Secondary Head",
+}
+DEFAULT_ACTIVE_CAMERA_KEY = "primary"
 
 CAMERA_RESOLUTION = (640, 480)  # width, height
 OVERLAY_RESOLUTION = (320, 240)  # width, height
 TOOL_MESH_SCALE = (0.001, 0.001, 0.001)
+BRACKET_MOUNT_POS = np.array([0.0, 0.0, 0.005], dtype=float)
+BRACKET_MOUNT_SIZE = (0.026, 0.005, 0.0)
+BRACKET_SPINE_POS = np.array([0.0, 0.0, 0.012], dtype=float)
+BRACKET_SPINE_SIZE = (0.008, 0.010, 0.012)
+BRACKET_CROSSBAR_POS = np.array([0.0, 0.0, 0.024], dtype=float)
+BRACKET_CROSSBAR_HALF_THICKNESS = 0.007
+BRACKET_CROSSBAR_HALF_HEIGHT = 0.006
+BRACKET_CROSSBAR_MARGIN_M = 0.014
 ADAPTER_POS = np.array([0.0, 0.0, 0.012], dtype=float)
 ADAPTER_SIZE = (0.018, 0.012, 0.0)
 ENDOSCOPE_MESH_POS = np.array([-0.017076289, -0.019918535, 0.024], dtype=float)
 CAMERA_MESH_POS = np.array([-0.018953737, -0.018953737, 0.024], dtype=float)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
+
+ROBOT_ARM_RGBA = (0.30, 0.36, 0.46, 1.0)
+BRACKET_RGBA = (0.75, 0.59, 0.22, 1.0)
+HEAD_COLORS = {
+    "primary": {
+        "endoscope": (0.07, 0.67, 0.60, 1.0),
+        "camera": (0.63, 0.96, 0.90, 1.0),
+    },
+    "secondary": {
+        "endoscope": (0.88, 0.39, 0.17, 1.0),
+        "camera": (0.98, 0.81, 0.32, 1.0),
+    },
+}
 
 BASE_CAMERA_ROTATION = np.array(
     [
@@ -54,13 +87,15 @@ BASE_CAMERA_ROTATION = np.array(
 
 @dataclass
 class EndoscopeCameraConfig:
+    head_spacing_m: float = 0.085
+    head_toe_in_deg: float = 30.0
     camera_x_m: float = 0.0
     camera_y_m: float = 0.0
     camera_z_m: float = 0.50
     fovy_deg: float = 55.0
     sensor_width_m: float = 0.0064
     sensor_height_m: float = 0.0048
-    yaw_deg: float = 0.0
+    yaw_deg: float = 40.0
     pitch_deg: float = -20.0
     roll_deg: float = 0.0
     target_x_m: float = -0.61
@@ -160,8 +195,13 @@ def quat_from_matrix(matrix: np.ndarray) -> np.ndarray:
     return quat
 
 
-def camera_quaternion(config: EndoscopeCameraConfig) -> np.ndarray:
-    yaw_matrix = rotation_y(math.radians(config.yaw_deg))
+def camera_yaw_for_head(config: EndoscopeCameraConfig, camera_key: str) -> float:
+    direction = 1.0 if camera_key == "primary" else -1.0
+    return config.yaw_deg + direction * config.head_toe_in_deg
+
+
+def camera_quaternion(config: EndoscopeCameraConfig, camera_key: str) -> np.ndarray:
+    yaw_matrix = rotation_y(math.radians(camera_yaw_for_head(config, camera_key)))
     pitch_matrix = rotation_x(math.radians(config.pitch_deg))
     roll_matrix = rotation_z(math.radians(config.roll_deg))
     rotation = BASE_CAMERA_ROTATION @ yaw_matrix @ pitch_matrix @ roll_matrix
@@ -200,6 +240,18 @@ def target_sphere_center(config: EndoscopeCameraConfig) -> np.ndarray:
     return target_position(config) + TARGET_BOARD_OFFSET_TO_SPHERE
 
 
+def head_body_offsets(config: EndoscopeCameraConfig) -> dict[str, np.ndarray]:
+    half_spacing = config.head_spacing_m / 2.0
+    return {
+        "primary": np.array([0.0, -half_spacing, 0.0], dtype=float),
+        "secondary": np.array([0.0, half_spacing, 0.0], dtype=float),
+    }
+
+
+def crossbar_half_span(config: EndoscopeCameraConfig) -> float:
+    return config.head_spacing_m / 2.0 + BRACKET_CROSSBAR_MARGIN_M
+
+
 def copy_import_assets(temp_root: Path) -> None:
     for mesh_path in ROBOT_MESH_DIR.glob("*.STL"):
         shutil.copy2(mesh_path, temp_root / mesh_path.name)
@@ -236,43 +288,93 @@ def add_visual_mesh_geom(
     geom.conaffinity = 0
 
 
+def add_bracket_geom(
+    body,
+    *,
+    name: str,
+    geom_type,
+    pos: np.ndarray | list[float],
+    size: tuple[float, float, float] | list[float],
+) -> None:
+    geom = body.add_geom(name=name)
+    geom.type = geom_type
+    geom.pos = pos
+    geom.size = size
+    geom.rgba = BRACKET_RGBA
+    geom.contype = 0
+    geom.conaffinity = 0
+
+
+def add_sensor_head(body, camera_key: str) -> None:
+    adapter = body.add_geom(name=f"{camera_key}_adapter")
+    adapter.type = mujoco.mjtGeom.mjGEOM_CYLINDER
+    adapter.pos = ADAPTER_POS
+    adapter.size = ADAPTER_SIZE
+    adapter.rgba = BRACKET_RGBA
+    adapter.contype = 0
+    adapter.conaffinity = 0
+
+    add_visual_mesh_geom(
+        body,
+        name=f"{camera_key}_endoscope_body_geom",
+        mesh_name="endoscope_mesh",
+        pos=ENDOSCOPE_MESH_POS,
+        rgba=HEAD_COLORS[camera_key]["endoscope"],
+    )
+    add_visual_mesh_geom(
+        body,
+        name=f"{camera_key}_camera_body_geom",
+        mesh_name="camera_mesh",
+        pos=CAMERA_MESH_POS,
+        rgba=HEAD_COLORS[camera_key]["camera"],
+    )
+
+    camera = body.add_camera(name=CAMERA_NAMES[camera_key])
+    camera.pos = camera_local_position(DEFAULT_CONFIG)
+    camera.quat = camera_quaternion(DEFAULT_CONFIG, camera_key)
+    camera.resolution = CAMERA_RESOLUTION
+    camera.sensor_size = [DEFAULT_CONFIG.sensor_width_m, DEFAULT_CONFIG.sensor_height_m]
+    camera.focal_pixel = camera_pixel_intrinsics(DEFAULT_CONFIG)[:2]
+    camera.principal_pixel = camera_pixel_intrinsics(DEFAULT_CONFIG)[2:]
+
+
 def add_endoscope_tool(spec: mujoco.MjSpec) -> None:
     link6 = spec.body("link_6")
     if link6 is None:
         raise ValueError("Failed to find link_6 in generated MJCF model.")
 
-    tool_body = link6.add_body(name=TOOL_BODY_NAME)
+    rig_body = link6.add_body(name=TOOL_RIG_BODY_NAME)
 
-    adapter = tool_body.add_geom(name="tool_adapter")
-    adapter.type = mujoco.mjtGeom.mjGEOM_CYLINDER
-    adapter.pos = ADAPTER_POS
-    adapter.size = ADAPTER_SIZE
-    adapter.rgba = (0.68, 0.70, 0.74, 1.0)
-    adapter.contype = 0
-    adapter.conaffinity = 0
-
-    add_visual_mesh_geom(
-        tool_body,
-        name="endoscope_body_geom",
-        mesh_name="endoscope_mesh",
-        pos=ENDOSCOPE_MESH_POS,
-        rgba=(0.78, 0.80, 0.84, 1.0),
+    add_bracket_geom(
+        rig_body,
+        name="rig_mount",
+        geom_type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+        pos=BRACKET_MOUNT_POS,
+        size=BRACKET_MOUNT_SIZE,
     )
-    add_visual_mesh_geom(
-        tool_body,
-        name="camera_body_geom",
-        mesh_name="camera_mesh",
-        pos=CAMERA_MESH_POS,
-        rgba=(0.92, 0.94, 0.98, 1.0),
+    add_bracket_geom(
+        rig_body,
+        name="rig_spine",
+        geom_type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=BRACKET_SPINE_POS,
+        size=BRACKET_SPINE_SIZE,
+    )
+    add_bracket_geom(
+        rig_body,
+        name="rig_crossbar",
+        geom_type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=BRACKET_CROSSBAR_POS,
+        size=[
+            BRACKET_CROSSBAR_HALF_THICKNESS,
+            crossbar_half_span(DEFAULT_CONFIG),
+            BRACKET_CROSSBAR_HALF_HEIGHT,
+        ],
     )
 
-    camera = tool_body.add_camera(name=CAMERA_NAME)
-    camera.pos = camera_local_position(DEFAULT_CONFIG)
-    camera.quat = camera_quaternion(DEFAULT_CONFIG)
-    camera.resolution = CAMERA_RESOLUTION
-    camera.sensor_size = [DEFAULT_CONFIG.sensor_width_m, DEFAULT_CONFIG.sensor_height_m]
-    camera.focal_pixel = camera_pixel_intrinsics(DEFAULT_CONFIG)[:2]
-    camera.principal_pixel = camera_pixel_intrinsics(DEFAULT_CONFIG)[2:]
+    for camera_key, body_name in HEAD_BODY_NAMES.items():
+        head_body = rig_body.add_body(name=body_name)
+        head_body.pos = head_body_offsets(DEFAULT_CONFIG)[camera_key]
+        add_sensor_head(head_body, camera_key)
 
 
 def add_target_body(spec: mujoco.MjSpec) -> None:
@@ -340,6 +442,15 @@ def add_scene_lights(spec: mujoco.MjSpec) -> None:
     fill_light.castshadow = False
 
 
+def apply_visual_theme(model: mujoco.MjModel) -> None:
+    robot_bodies = {"link_1", "link_2", "link_3", "link_4", "link_5", "link_6"}
+    for geom_id in range(model.ngeom):
+        body_id = int(model.geom_bodyid[geom_id])
+        body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+        if body_name in robot_bodies:
+            model.geom_rgba[geom_id] = ROBOT_ARM_RGBA
+
+
 def load_model() -> mujoco.MjModel:
     if not URDF_PATH.is_file():
         raise FileNotFoundError(f"URDF not found: {URDF_PATH}")
@@ -367,7 +478,9 @@ def load_model() -> mujoco.MjModel:
         add_endoscope_tool(spec)
         add_target_body(spec)
         add_scene_lights(spec)
-        return spec.compile()
+        model = spec.compile()
+        apply_visual_theme(model)
+        return model
 
 
 def parse_args() -> argparse.Namespace:
@@ -376,6 +489,12 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--check-only", action="store_true", help="Only load the model and print a summary.")
     mode.add_argument("--capture-only", action="store_true", help="Save a camera image and exit.")
     parser.add_argument("--no-ui", action="store_true", help="Disable the control panel.")
+    parser.add_argument(
+        "--camera",
+        choices=tuple(CAMERA_NAMES),
+        default=DEFAULT_ACTIVE_CAMERA_KEY,
+        help="Select which camera head to preview or capture.",
+    )
     parser.add_argument(
         "--joint-deg",
         nargs=6,
@@ -417,13 +536,25 @@ def apply_runtime_config(
     target_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, TARGET_BODY_NAME)
     model.body_pos[target_body_id] = target_position(config)
 
-    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, CAMERA_NAME)
     focal_mx, focal_my, principal_mx, principal_my = camera_metric_intrinsics(config)
-    model.cam_pos[camera_id] = camera_local_position(config)
-    model.cam_quat[camera_id] = camera_quaternion(config)
-    model.cam_fovy[camera_id] = config.fovy_deg
-    model.cam_sensorsize[camera_id] = [config.sensor_width_m, config.sensor_height_m]
-    model.cam_intrinsic[camera_id] = [focal_mx, focal_my, principal_mx, principal_my]
+    for camera_key, offset in head_body_offsets(config).items():
+        body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, HEAD_BODY_NAMES[camera_key])
+        model.body_pos[body_id] = offset
+
+    crossbar_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "rig_crossbar")
+    model.geom_size[crossbar_geom_id] = [
+        BRACKET_CROSSBAR_HALF_THICKNESS,
+        crossbar_half_span(config),
+        BRACKET_CROSSBAR_HALF_HEIGHT,
+    ]
+
+    for camera_key, camera_name in CAMERA_NAMES.items():
+        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        model.cam_pos[camera_id] = camera_local_position(config)
+        model.cam_quat[camera_id] = camera_quaternion(config, camera_key)
+        model.cam_fovy[camera_id] = config.fovy_deg
+        model.cam_sensorsize[camera_id] = [config.sensor_width_m, config.sensor_height_m]
+        model.cam_intrinsic[camera_id] = [focal_mx, focal_my, principal_mx, principal_my]
 
     mujoco.mj_forward(model, data)
 
@@ -432,28 +563,31 @@ def endoscope_camera_parameters(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     config: EndoscopeCameraConfig,
-) -> dict[str, float | list[float] | str]:
+) -> dict[str, dict[str, float | list[float] | str]]:
     fx, fy, cx, cy = camera_pixel_intrinsics(config)
-    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, CAMERA_NAME)
-    return {
-        "name": CAMERA_NAME,
-        "local_position": np.array(model.cam_pos[camera_id], dtype=float).round(6).tolist(),
-        "world_position": np.array(data.cam_xpos[camera_id], dtype=float).round(6).tolist(),
-        "quat": np.array(model.cam_quat[camera_id], dtype=float).round(6).tolist(),
-        "resolution": np.array(model.cam_resolution[camera_id], dtype=int).tolist(),
-        "sensor_size_m": np.array(model.cam_sensorsize[camera_id], dtype=float).round(6).tolist(),
-        "focal_length_m": np.array(model.cam_intrinsic[camera_id][:2], dtype=float).round(6).tolist(),
-        "principal_point_m": np.array(model.cam_intrinsic[camera_id][2:], dtype=float).round(6).tolist(),
-        "focal_pixel": [round(fx, 6), round(fy, 6)],
-        "principal_pixel": [round(cx, 6), round(cy, 6)],
-        "fovy_deg": round(float(model.cam_fovy[camera_id]), 6),
-    }
+    parameters: dict[str, dict[str, float | list[float] | str]] = {}
+    for camera_key, camera_name in CAMERA_NAMES.items():
+        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        parameters[camera_key] = {
+            "name": camera_name,
+            "local_position": np.array(model.cam_pos[camera_id], dtype=float).round(6).tolist(),
+            "world_position": np.array(data.cam_xpos[camera_id], dtype=float).round(6).tolist(),
+            "quat": np.array(model.cam_quat[camera_id], dtype=float).round(6).tolist(),
+            "resolution": np.array(model.cam_resolution[camera_id], dtype=int).tolist(),
+            "sensor_size_m": np.array(model.cam_sensorsize[camera_id], dtype=float).round(6).tolist(),
+            "focal_length_m": np.array(model.cam_intrinsic[camera_id][:2], dtype=float).round(6).tolist(),
+            "principal_point_m": np.array(model.cam_intrinsic[camera_id][2:], dtype=float).round(6).tolist(),
+            "focal_pixel": [round(fx, 6), round(fy, 6)],
+            "principal_pixel": [round(cx, 6), round(cy, 6)],
+            "fovy_deg": round(float(model.cam_fovy[camera_id]), 6),
+        }
+    return parameters
 
 
-def render_endoscope_view(model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray:
+def render_endoscope_view(model: mujoco.MjModel, data: mujoco.MjData, camera_key: str) -> np.ndarray:
     width, height = CAMERA_RESOLUTION
     renderer = mujoco.Renderer(model, height=height, width=width)
-    renderer.update_scene(data, camera=CAMERA_NAME)
+    renderer.update_scene(data, camera=CAMERA_NAMES[camera_key])
     image = renderer.render().copy()
     renderer.close()
     return image
@@ -464,14 +598,20 @@ def save_png(path: Path, image: np.ndarray) -> None:
     Image.fromarray(np.ascontiguousarray(image), mode="RGB").save(path)
 
 
-def save_endoscope_view(model: mujoco.MjModel, data: mujoco.MjData) -> Path:
-    output_path = CAPTURE_DIR / "endoscope.png"
-    save_png(output_path, render_endoscope_view(model, data))
+def save_endoscope_view(model: mujoco.MjModel, data: mujoco.MjData, camera_key: str) -> Path:
+    output_path = CAPTURE_DIR / f"{camera_key}_endoscope.png"
+    save_png(output_path, render_endoscope_view(model, data, camera_key))
     return output_path
 
 
-def overlay_endoscope_view(handle, model: mujoco.MjModel, data: mujoco.MjData, config: EndoscopeCameraConfig) -> None:
-    image = render_endoscope_view(model, data)
+def overlay_endoscope_view(
+    handle,
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    config: EndoscopeCameraConfig,
+    camera_key: str,
+) -> None:
+    image = render_endoscope_view(model, data, camera_key)
     overlay_width, overlay_height = OVERLAY_RESOLUTION
     display_image = np.array(
         Image.fromarray(image, mode="RGB").resize(
@@ -484,12 +624,24 @@ def overlay_endoscope_view(handle, model: mujoco.MjModel, data: mujoco.MjData, c
     handle.set_images([(rect, display_image)])
     handle.set_texts(
         [
-            (None, mujoco.mjtGridPos.mjGRID_TOPLEFT, "Camera FOV", f"{config.fovy_deg:.1f} deg"),
+            (None, mujoco.mjtGridPos.mjGRID_TOPLEFT, "Active Head", CAMERA_LABELS[camera_key]),
+            (
+                None,
+                mujoco.mjtGridPos.mjGRID_TOPRIGHT,
+                "Camera FOV",
+                f"{config.fovy_deg:.1f} deg",
+            ),
             (
                 None,
                 mujoco.mjtGridPos.mjGRID_BOTTOMLEFT,
-                "Camera Offset",
+                "Rig Offset",
                 f"{config.camera_x_m:.3f}, {config.camera_y_m:.3f}, {config.camera_z_m:.3f} m",
+            ),
+            (
+                None,
+                mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT,
+                "Head Spacing",
+                f"{config.head_spacing_m * 1000.0:.1f} mm",
             ),
         ]
     )
@@ -500,6 +652,7 @@ def print_runtime_summary(
     data: mujoco.MjData,
     qpos: np.ndarray,
     config: EndoscopeCameraConfig,
+    active_camera_key: str,
 ) -> None:
     fx, fy, cx, cy = camera_pixel_intrinsics(config)
     print(f"Loaded model from {URDF_PATH}")
@@ -508,6 +661,9 @@ def print_runtime_summary(
         f"nbody={model.nbody}, ngeom={model.ngeom}, nmesh={model.nmesh}"
     )
     print(f"qpos={qpos.tolist()}")
+    print(f"active_camera={CAMERA_LABELS[active_camera_key]}")
+    print(f"head_spacing_m={config.head_spacing_m}")
+    print(f"head_toe_in_deg={config.head_toe_in_deg}")
     print(f"camera_local_position_m={camera_local_position(config).round(6).tolist()}")
     print(f"camera_fovy_deg={config.fovy_deg}")
     print(f"camera_sensor_size_m={[config.sensor_width_m, config.sensor_height_m]}")
@@ -515,14 +671,14 @@ def print_runtime_summary(
         "camera_intrinsics_pixels="
         f"{{'fx': {fx:.6f}, 'fy': {fy:.6f}, 'cx': {cx:.6f}, 'cy': {cy:.6f}}}"
     )
-    print(f"camera_yaw_pitch_roll_deg={[config.yaw_deg, config.pitch_deg, config.roll_deg]}")
+    print(f"camera_shared_yaw_pitch_roll_deg={[config.yaw_deg, config.pitch_deg, config.roll_deg]}")
     print(f"target_position_m={target_position(config).round(6).tolist()}")
     print(f"target_sphere_center_m={target_sphere_center(config).round(6).tolist()}")
-    print(f"camera={endoscope_camera_parameters(model, data, config)}")
+    print(f"cameras={endoscope_camera_parameters(model, data, config)}")
 
 
 class EndoscopeControlPanel:
-    def __init__(self, config: EndoscopeCameraConfig, qpos: np.ndarray):
+    def __init__(self, config: EndoscopeCameraConfig, qpos: np.ndarray, active_camera_key: str):
         import tkinter as tk
 
         self._tk = tk
@@ -540,10 +696,12 @@ class EndoscopeControlPanel:
         self._capture_requested = False
         self._status_var = tk.StringVar()
         self._vars: dict[str, tk.DoubleVar] = {}
+        self._active_camera_var = tk.StringVar(value=active_camera_key)
         self._defaults = config
         self._default_joint_deg = joint_degrees_from_qpos(qpos)
         self._base_qpos = qpos.copy()
 
+        self._active_camera_var.trace_add("write", self._mark_dirty)
         self._build_controls(config, qpos)
         self._refresh_status()
 
@@ -576,11 +734,13 @@ class EndoscopeControlPanel:
             for joint_index in range(len(BENT_QPOS))
         ]
         camera_controls = [
+            ("head_spacing_mm", "Head Spacing (mm)", 40.0, 140.0, 1.0, config.head_spacing_m * 1000.0),
             ("camera_x_mm", "Camera X (mm)", -80.0, 80.0, 1.0, config.camera_x_m * 1000.0),
             ("camera_y_mm", "Camera Y (mm)", -80.0, 80.0, 1.0, config.camera_y_m * 1000.0),
             ("camera_z_mm", "Camera Z (mm)", 200.0, 600.0, 1.0, config.camera_z_m * 1000.0),
             ("fovy_deg", "Vertical FOV (deg)", 20.0, 110.0, 0.5, config.fovy_deg),
-            ("yaw_deg", "Camera Yaw (deg)", -45.0, 45.0, 0.5, config.yaw_deg),
+            ("yaw_deg", "Shared Yaw (deg)", -45.0, 90.0, 0.5, config.yaw_deg),
+            ("toe_in_deg", "Head Toe-In (deg)", 0.0, 45.0, 0.5, config.head_toe_in_deg),
             ("pitch_deg", "Camera Pitch (deg)", -45.0, 45.0, 0.5, config.pitch_deg),
             ("roll_deg", "Camera Roll (deg)", -180.0, 180.0, 1.0, config.roll_deg),
             ("sensor_w_mm", "Sensor Width (mm)", 2.0, 12.0, 0.1, config.sensor_width_m * 1000.0),
@@ -606,8 +766,20 @@ class EndoscopeControlPanel:
                 variable=var,
             ).grid(row=row * 2 + 1, column=0, sticky="we", pady=(0, 8))
 
+        camera_select_row = len(controls) * 2
+        tk.Label(frame, text="Active View", anchor="w").grid(row=camera_select_row, column=0, sticky="w", pady=(0, 4))
+        select_frame = tk.Frame(frame)
+        select_frame.grid(row=camera_select_row + 1, column=0, sticky="w", pady=(0, 8))
+        for camera_key in CAMERA_NAMES:
+            tk.Radiobutton(
+                select_frame,
+                text=CAMERA_LABELS[camera_key],
+                value=camera_key,
+                variable=self._active_camera_var,
+            ).pack(side="left", padx=(0, 10))
+
         button_frame = tk.Frame(frame, pady=8)
-        button_frame.grid(row=len(controls) * 2, column=0, sticky="we")
+        button_frame.grid(row=camera_select_row + 2, column=0, sticky="we")
 
         tk.Button(button_frame, text="Save PNG", command=self.request_capture, width=14).pack(side="left")
         tk.Button(button_frame, text="Reset Defaults", command=self.reset, width=16).pack(side="left", padx=8)
@@ -616,15 +788,15 @@ class EndoscopeControlPanel:
         tk.Label(
             frame,
             text=(
-                "The endoscope meshes are fixed to link_6 and the virtual camera is mounted at the tip.\n"
-                "Adjust joints, camera pose, intrinsics, and target position, then use Save PNG."
+                "Two endoscope-camera heads are mounted on a rigid support bracket fixed to link_6.\n"
+                "Adjust joints, bracket spacing, camera pose, intrinsics, target position, and active view."
             ),
             justify="left",
             anchor="w",
-        ).grid(row=len(controls) * 2 + 1, column=0, sticky="we", pady=(4, 8))
+        ).grid(row=camera_select_row + 3, column=0, sticky="we", pady=(4, 8))
 
         tk.Label(frame, textvariable=self._status_var, justify="left", anchor="w", font=("Consolas", 10)).grid(
-            row=len(controls) * 2 + 2, column=0, sticky="we"
+            row=camera_select_row + 4, column=0, sticky="we"
         )
 
     def _refresh_status(self) -> None:
@@ -636,10 +808,13 @@ class EndoscopeControlPanel:
         self._status_var.set(
             "\n".join(
                 [
+                    f"Active head: {CAMERA_LABELS[self.current_active_camera_key()]}",
                     "Joints: " + ", ".join(f"{name}={deg:.1f}" for name, deg in zip(JOINT_NAMES, joint_deg)),
                     f"Resolution: {CAMERA_RESOLUTION[0]} x {CAMERA_RESOLUTION[1]}",
                     f"fx={fx:.2f}px  fy={fy:.2f}px",
                     f"cx={cx:.1f}px  cy={cy:.1f}px",
+                    f"Head spacing: {config.head_spacing_m * 1000.0:.1f} mm",
+                    f"Toe-in: {config.head_toe_in_deg:.1f} deg",
                     f"Camera local pos: [{camera_pos[0]:.3f}, {camera_pos[1]:.3f}, {camera_pos[2]:.3f}] m",
                     f"Target sphere: [{sphere[0]:.3f}, {sphere[1]:.3f}, {sphere[2]:.3f}] m",
                 ]
@@ -648,6 +823,8 @@ class EndoscopeControlPanel:
 
     def current_config(self) -> EndoscopeCameraConfig:
         return EndoscopeCameraConfig(
+            head_spacing_m=self._vars["head_spacing_mm"].get() / 1000.0,
+            head_toe_in_deg=self._vars["toe_in_deg"].get(),
             camera_x_m=self._vars["camera_x_mm"].get() / 1000.0,
             camera_y_m=self._vars["camera_y_mm"].get() / 1000.0,
             camera_z_m=self._vars["camera_z_mm"].get() / 1000.0,
@@ -661,6 +838,9 @@ class EndoscopeControlPanel:
             target_y_m=self._vars["target_y_mm"].get() / 1000.0,
             target_z_m=self._vars["target_z_mm"].get() / 1000.0,
         )
+
+    def current_active_camera_key(self) -> str:
+        return self._active_camera_var.get()
 
     def current_joint_deg(self) -> list[float]:
         return [self._vars[f"joint_{joint_index + 1}_deg"].get() for joint_index in range(len(BENT_QPOS))]
@@ -685,6 +865,8 @@ class EndoscopeControlPanel:
         defaults = self._defaults
         for joint_index, joint_deg in enumerate(self._default_joint_deg, start=1):
             self._vars[f"joint_{joint_index}_deg"].set(joint_deg)
+        self._vars["head_spacing_mm"].set(defaults.head_spacing_m * 1000.0)
+        self._vars["toe_in_deg"].set(defaults.head_toe_in_deg)
         self._vars["camera_x_mm"].set(defaults.camera_x_m * 1000.0)
         self._vars["camera_y_mm"].set(defaults.camera_y_m * 1000.0)
         self._vars["camera_z_mm"].set(defaults.camera_z_m * 1000.0)
@@ -697,6 +879,7 @@ class EndoscopeControlPanel:
         self._vars["target_x_mm"].set(defaults.target_x_m * 1000.0)
         self._vars["target_y_mm"].set(defaults.target_y_m * 1000.0)
         self._vars["target_z_mm"].set(defaults.target_z_m * 1000.0)
+        self._active_camera_var.set(DEFAULT_ACTIVE_CAMERA_KEY)
         self._mark_dirty()
 
     def update(self) -> bool:
@@ -719,25 +902,26 @@ def main() -> None:
     current_qpos = qpos_from_joint_degrees(base_qpos, args.joint_deg)
 
     config = DEFAULT_CONFIG
+    active_camera_key = args.camera
     apply_runtime_config(model, data, current_qpos, config)
 
     if args.check_only:
-        print_runtime_summary(model, data, current_qpos, config)
+        print_runtime_summary(model, data, current_qpos, config, active_camera_key)
         return
 
     if args.capture_only:
-        output_path = save_endoscope_view(model, data)
+        output_path = save_endoscope_view(model, data, active_camera_key)
         print(f"endoscope image saved to {output_path}")
-        print_runtime_summary(model, data, current_qpos, config)
+        print_runtime_summary(model, data, current_qpos, config, active_camera_key)
         return
 
     from mujoco import viewer
 
-    control_panel = None if args.no_ui else EndoscopeControlPanel(config, current_qpos)
+    control_panel = None if args.no_ui else EndoscopeControlPanel(config, current_qpos, active_camera_key)
 
     with viewer.launch_passive(model, data) as handle:
-        overlay_endoscope_view(handle, model, data, config)
-        print_runtime_summary(model, data, current_qpos, config)
+        overlay_endoscope_view(handle, model, data, config, active_camera_key)
+        print_runtime_summary(model, data, current_qpos, config, active_camera_key)
 
         while handle.is_running():
             if control_panel is not None:
@@ -746,14 +930,15 @@ def main() -> None:
                     break
                 if control_panel.consume_dirty():
                     config = control_panel.current_config()
+                    active_camera_key = control_panel.current_active_camera_key()
                     current_qpos = control_panel.current_qpos()
                     apply_runtime_config(model, data, current_qpos, config)
-                    overlay_endoscope_view(handle, model, data, config)
+                    overlay_endoscope_view(handle, model, data, config, active_camera_key)
                 if control_panel.consume_capture_request():
                     apply_runtime_config(model, data, current_qpos, config)
-                    output_path = save_endoscope_view(model, data)
+                    output_path = save_endoscope_view(model, data, active_camera_key)
                     print(f"endoscope image saved to {output_path}")
-                    print_runtime_summary(model, data, current_qpos, config)
+                    print_runtime_summary(model, data, current_qpos, config, active_camera_key)
 
             freeze_state(data, current_qpos)
             mujoco.mj_forward(model, data)
