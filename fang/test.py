@@ -79,22 +79,18 @@ ENDOSCOPE_MESH_POS = np.array([-0.017095, -0.025616, 0.003], dtype=float)
 CAMERA_MESH_POS = np.array([-0.018954, 0.018954, 0.010], dtype=float)
 CAMERA_MESH_QUAT = (0.0, 1.0, 0.0, 0.0)
 TARGET_BOARD_OFFSET_TO_SPHERE = np.array([0.05, 0.0, 0.0], dtype=float)
-HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.018], dtype=float)
+# Move the whole camera module forward so the housing starts after the bracket
+# instead of occupying the same volume as the crossbar.
+HEAD_CAMERA_MODULE_OFFSET = np.array([-0.008, 0.0, 0.0455], dtype=float)
 CAMERA_TO_ENDOSCOPE_OFFSET = np.array([0.0, 0.0, 0.040], dtype=float)
 HEAD_CAMERA_SUPPORT_START = np.array([0.0, 0.0, 0.012], dtype=float)
-HEAD_CAMERA_SUPPORT_END = HEAD_CAMERA_MODULE_OFFSET + np.array([0.001, 0.0, -0.004], dtype=float)
+HEAD_CAMERA_SUPPORT_END = HEAD_CAMERA_MODULE_OFFSET + np.array([0.001, 0.0, -0.0155], dtype=float)
 CAMERA_CONNECTOR_SEAT_POS = np.array([0.0, 0.0, 0.017], dtype=float)
 CAMERA_CONNECTOR_SEAT_SIZE = (0.0085, 0.0085, 0.0045)
 CAMERA_CONNECTOR_TUBE_POS = np.array([0.0, 0.0, 0.028], dtype=float)
 CAMERA_CONNECTOR_TUBE_SIZE = (0.0032, 0.0065, 0.0)
 ENDOSCOPE_LOCK_RING_POS = np.array([0.0, 0.0, 0.003], dtype=float)
 ENDOSCOPE_LOCK_RING_SIZE = (0.0068, 0.0030, 0.0)
-HELIX_START = np.array([0.0, 0.0, 0.017], dtype=float)
-HELIX_END = CAMERA_TO_ENDOSCOPE_OFFSET + np.array([0.0, 0.0, -0.008], dtype=float)
-HELIX_RADIUS_M = 0.0055
-HELIX_TURNS = 2.0
-HELIX_SEGMENTS = 10
-HELIX_WIRE_RADIUS = 0.0008
 PROJECTOR_SUPPORT_START_POS = np.array([-0.010, 0.0, 0.040], dtype=float)
 PROJECTOR_SUPPORT_HALF_SIZE_XY = (0.0030, 0.0030)
 PROJECTOR_HOUSING_SIZE = (0.012, 0.010, 0.012)
@@ -106,7 +102,6 @@ PROJECTOR_MOUNT_CAP_SIZE = (0.014, 0.018, 0.0035)
 ROBOT_ARM_RGBA = (0.30, 0.36, 0.46, 1.0)
 BRACKET_RGBA = (0.75, 0.59, 0.22, 1.0)
 CONNECTOR_RGBA = (0.42, 0.45, 0.49, 1.0)
-SPIRAL_RGBA = (0.30, 0.33, 0.37, 1.0)
 PROJECTOR_RGBA = (0.56, 0.28, 0.76, 1.0)
 PROJECTOR_LENS_RGBA = (0.82, 0.90, 1.00, 1.0)
 TARGET_BASE_RGBA = (0.18, 0.72, 0.44, 1.0)
@@ -552,7 +547,7 @@ def add_sensor_head(body, camera_key: str) -> None:
     )
     camera_plate = camera_module.add_geom(name=f"{camera_key}_camera_plate")
     camera_plate.type = mujoco.mjtGeom.mjGEOM_BOX
-    camera_plate.pos = [0.001, 0.0, 0.004]
+    camera_plate.pos = [0.001, 0.0, -0.012]
     camera_plate.size = [0.009, 0.010, 0.0035]
     camera_plate.rgba = BRACKET_RGBA
     camera_plate.contype = 0
@@ -576,17 +571,6 @@ def add_sensor_head(body, camera_key: str) -> None:
     connector_tube.contype = 0
     connector_tube.conaffinity = 0
 
-    add_helical_link(
-        camera_module,
-        name_prefix=f"{camera_key}_spiral_link",
-        start=HELIX_START,
-        end=HELIX_END,
-        radius=HELIX_RADIUS_M,
-        turns=HELIX_TURNS,
-        segments=HELIX_SEGMENTS,
-        wire_radius=HELIX_WIRE_RADIUS,
-        rgba=SPIRAL_RGBA,
-    )
     endoscope_module = camera_module.add_body(name=f"{camera_key}_endoscope_module")
     endoscope_module.pos = CAMERA_TO_ENDOSCOPE_OFFSET
     add_visual_mesh_geom(
@@ -1334,7 +1318,7 @@ class EndoscopeControlPanel:
             text=(
                 "Two cameras and one projector are mounted on the end-effector bracket.\n"
                 "The bracket fixes the left and right cameras plus the projector.\n"
-                "Each endoscope is mounted coaxially in front of its camera through a stepped connector and spiral link.\n"
+                "Each endoscope is mounted coaxially in front of its camera through a stepped connector.\n"
                 "The projector stays above the stereo pair on a short bracket. Leave approximation off if you only need placement."
             ),
             justify="left",
